@@ -133,6 +133,33 @@ Ví dụ dữ liệu thật in ra khi bạn bấm nút **X** và đẩy cần tr
 [    6300 ms][PS4][DATA] #0 btn=0x0000 dpad=0x00 misc=0x00 L=(   0,-508) R=(   0,   0) L2=   0 R2=   0 gyro=(     0,     0,     0) accel=(     0,     0,     0) pin=78%
 ```
 
+Bấm **D-Pad lên** (với `PRINT_MODE 0` bạn sẽ thấy y chang thế này, không bị log khác chen vào):
+
+```text
+-------------------- D-PAD --------------------
+[    7115 ms][PS4][DPAD] #0  ^     LEN              (0x01)
+-----------------------------------------------
+[    7115 ms][PS4][DATA] #0 btn=0x0000 dpad=0x01 misc=0x00 L=(   0,   0) R=(   0,   0) L2=   0 R2=   0 gyro=(     0,     0,     0) accel=(     0,     0,     0) pin=78%
+[    7330 ms][PS4][DPAD] #0  .     giua             (0x00)
+```
+
+Và với `PRINT_MODE 2` (**in đầy đủ gói tin** — trả lời câu hỏi “cho xem hết các trường”):
+
+```text
++================ GOI TIN TAY CAM ================+
+[    8001 ms][PS4] #0  model=34 (DualShock 4)
+[PS4]   Nut bam      : 0x0001   -> X(Cheo)
+[PS4]   Nut phu      : 0x00     PS=0  SHARE=0  OPTIONS=0
+[PS4]   D-Pad        : 0x01   ^     LEN
+[PS4]   Analog trai  : x=   +0   y=   +0
+[PS4]   Analog phai  : x=   +0   y=   +0
+[PS4]   Co  L2 / R2  :    0  /    0
+[PS4]   Gyro         : x=    +0  y=    +0  z=    +0
+[PS4]   Gia toc      : x=    +0  y=    +0  z=    +0
+[PS4]   Pin          : 78%  (200/255)
++=================================================+
+```
+
 ### Ý nghĩa từng cột
 
 | Cột | Ý nghĩa |
@@ -146,6 +173,40 @@ Ví dụ dữ liệu thật in ra khi bạn bấm nút **X** và đẩy cần tr
 | `gyro=(x,y,z)` | con quay hồi chuyển |
 | `accel=(x,y,z)` | gia tốc kế |
 | `pin=%` | pin tay cầm (0% = không rõ) |
+
+### ⬆️ D-Pad hiển thị thế nào?
+
+Mỗi lần bạn **nhấn / nhả / đổi hướng** D-Pad, chương trình in một **khối riêng có viền** để khỏi bị trôi giữa dòng log:
+
+```text
+-------------------- D-PAD --------------------
+[    8249 ms][PS4][DPAD] #0  ^     LEN              (0x01)
+-----------------------------------------------
+```
+
+| Cột | Ý nghĩa |
+|---|---|
+| `^` / `v` / `<` / `>` | mũi tên hướng: **^ = LÊN, v = XUỐNG, < = TRÁI, > = PHẢI** (chéo = 2 mũi tên, ví dụ `^>` = LÊN + PHẢI) |
+| `.` | đang ở **giữa** (không bấm hướng nào) |
+| `0x01` … `0x0C` | mã thô: `0x01`=LÊN, `0x02`=XUỐNG, `0x04`=PHẢI, `0x08`=TRÁI, `0x00`=giữa |
+
+> **❗ “Tôi bấm D-Pad mà không thấy gì thay đổi?”**
+> Nguyên nhân **không phải** D-Pad không hoạt động — Bluepad32 vẫn nhận bình thường (xem mã nguồn
+> `uni_hid_parser_ds4.c`: D-Pad được đọc từ *hat switch* → `uni_hid_parser_hat_to_dpad()`).
+> Lý do là bản cũ in log liên tục **~20 dòng/giây**, nên dòng D-Pad vừa in ra đã bị cuốn trôi mất.
+> **Đã sửa:** giờ mặc định `PRINT_MODE 0` → **chỉ in khi có gì thay đổi**, và D-Pad được in thành khối riêng, rất khó sót.
+> Nếu bạn muốn quay lại in liên tục, đổi `PRINT_MODE` thành `1` (hoặc `2` để xem đầy đủ mọi trường).
+
+### 🔌 Muốn ngắt kết nối thì bấm nút nào?
+
+| Cách | Thao tác | Kết quả |
+|---|---|---|
+| **Tổ hợp trên tay cầm** (khuyên dùng) | **Giữ đồng thời SHARE + OPTIONS trong 2 giây** | ESP32 gọi ngắt kết nối, in `Ngat ket noi tay cam #0 theo yeu cau (SHARE + OPTIONS).` · Muốn nối lại → **bấm nút PS** |
+| **Tắt hẳn tay cầm** | **Giữ nút PS ~10 giây** đến khi đèn tắt | Tay cầm tắt nguồn → mất kết nối. Bấm PS để bật lại và kết nối lại |
+| **Xoá ghép nối hoàn toàn** | Đặt `FORGET_BT_KEYS_ON_BOOT 1` rồi nạp lại | ESP32 quên tay cầm; lần sau phải giữ **SHARE + PS** để ghép nối lại từ đầu |
+| **Rút cáp / nhấn EN** | Nhấn nút **EN** trên board | ESP32 khởi động lại; tay cầm tự kết nối lại (bấm PS nếu cần) |
+
+Thời gian giữ `SHARE + OPTIONS` chỉnh bằng `DISCONNECT_HOLD_MS` ở đầu `src/main.cpp`.
 
 ### Bảng mã nút — `btn`
 
@@ -230,7 +291,10 @@ Trong `src/main.cpp`:
 |---|---|---|
 | `USE_MAC_FILTER` | `0` | `1` = chỉ cho phép tay cầm có MAC bên dưới |
 | `TARGET_MAC` | `"A0:5A:5D:F9:C5:80"` | MAC tay cầm của bạn (chỉ dùng khi bật lọc) |
-| `PRINT_INTERVAL_MS` | `100` | Chu kỳ in dòng `[DATA]` (ms). `0` = chỉ in khi dữ liệu thay đổi |
+| **`PRINT_MODE`** | `0` | **Cách hiển thị dữ liệu.** `0` = chỉ in khi **có thay đổi** (dễ nhìn nhất — khuyên dùng) · `1` = in lặp lại mỗi `PRINT_INTERVAL_MS` ms + in ngay khi đổi · `2` = **in đầy đủ từng gói tin** (mỗi trường 1 dòng, có mũi tên D-Pad) |
+| `PRINT_INTERVAL_MS` | `500` | Chu kỳ in lặp lại (ms) — chỉ có tác dụng khi `PRINT_MODE = 1` hoặc `2` |
+| `AXIS_DEADBAND` | `6` | Ngưỡng nhạy cần gạt. Thay đổi nhỏ hơn mức này sẽ **không in** (tránh log nhiễu khi tay rung) |
+| **`DISCONNECT_HOLD_MS`** | `2000` | Giữ **SHARE + OPTIONS** bao nhiêu ms thì ESP32 tự ngắt kết nối tay cầm |
 | `WARN_NO_CONTROLLER_SEC` | `15` | Sau bao lâu không kết nối thì in **E10** |
 | `WARN_REPEAT_SEC` | `30` | Nhắc lại cảnh báo mỗi bao nhiêu giây |
 | `DATA_TIMEOUT_MS` | `3000` | Không có dữ liệu trong bao lâu thì coi là treo (**E14**) |
@@ -288,6 +352,8 @@ Ngoài ra có thể điều khiển ngược lại tay cầm: `setColorLED(r,g,b
 | Đã ghép với thiết bị khác (PS4, điện thoại, ESP32 khác) | Không sao: giữ **SHARE + PS** để ghép nối lại với ESP32 |
 | Log có `DS4: Failed to create virtual device` | **Bình thường, không phải lỗi.** Dòng này do Bluepad32 in ra khi nó không tạo "chuột ảo" cho touchpad — vì firmware đã chủ động tắt tính năng đó (`BP32.enableVirtualDevice(false)`). Tay cầm vẫn hoạt động bình thường |
 | Log có `sdp_query_timeout()` rồi tay cầm rớt | ESP32 đang giữ **khoá Bluetooth cũ bị lỗi** nên không đọc được thông tin tay cầm. Cách sửa: đặt `FORGET_BT_KEYS_ON_BOOT 1` trong `src/main.cpp` → nạp lại → **tắt tay cầm, giữ SHARE + PS** để ghép nối lại → đổi lại `0`. (Hoặc nạp với `upload_flags = --erase-all` trong `platformio.ini` để xoá sạch flash) |
+| Bấm D-Pad (hoặc nút bất kỳ) nhưng không thấy log thay đổi | Log đang chạy quá nhanh làm trôi dòng. Đặt `PRINT_MODE 0` (mặc định hiện tại) → chỉ in khi có thay đổi, D-Pad in thành khối riêng có viền |
+| Kết nối rồi nhưng log im lìm, tưởng treo | Bình thường: `PRINT_MODE 0` **chỉ in khi bạn thao tác**. Hãy bấm 1 nút bất kỳ hoặc gạt cần. Muốn thấy dữ liệu liên tục thì đổi `PRINT_MODE 1` |
 | Trước đây thấy lỗi `E13 ... (class=0)` khi tay cầm vừa kết nối | **Đã sửa trong bản này.** Đó là lỗi của firmware cũ: kiểm tra `isGamepad()` ngay lúc tay cầm vừa kết nối, nhưng lúc đó Bluepad32 chưa nhận gói tin đầu tiên nên `class` vẫn = 0 (NONE) → firmware hiểu nhầm và **đá tay cầm ra**. Nay firmware chỉ loại bỏ bàn phím/chuột, còn tay cầm thì chờ dữ liệu đầu tiên |
 
 ---

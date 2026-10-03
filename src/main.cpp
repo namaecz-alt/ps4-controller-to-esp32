@@ -37,8 +37,24 @@
  * Chi co tac dung khi USE_MAC_FILTER = 1. */
 #define TARGET_MAC "A0:5A:5D:F9:C5:80"
 
-/* Chu ky in du lieu lien tuc (ms). 0 = chi in khi du lieu thay doi. */
-#define PRINT_INTERVAL_MS 100
+/* ===================== C A U   H I N H   H I E N   T H I ==================== */
+/* Chon 1 trong 3 che do in ra Serial Monitor:
+ *   0 = CHI in khi co thay doi (nut / D-Pad / analog)  -> DE NHIN NHAT (khuyen nghi)
+ *   1 = In LAP LAI lien tuc moi PRINT_INTERVAL_MS ms  + in ngay khi co thay doi
+ *   2 = In DAY DU (dump) tung goi tin: moi truong 1 dong, co mui ten D-Pad
+ *       (day la "ban do goi tin" day du nhat, dung de kiem tra chi tiet)
+ */
+#define PRINT_MODE 0
+
+/* Chu ky in lap lai (ms) - chi co tac dung khi PRINT_MODE = 1 hoac 2 */
+#define PRINT_INTERVAL_MS 500
+
+/* Nguong nhay cua analog (0..511). Thay doi nho hon nguong nay se khong in,
+ * de tranh in lien tuc do nhieu cua canh tay cam. */
+#define AXIS_DEADBAND 6
+
+/* Giu dong thoi SHARE + OPTIONS bao nhieu ms thi ESP32 tu ngat ket noi tay cam. */
+#define DISCONNECT_HOLD_MS 2000
 
 /* Sau bao nhieu giay khong ket noi duoc thi in canh bao E10 (va nhac lai moi WARN_REPEAT_SEC giay). */
 #define WARN_NO_CONTROLLER_SEC 15
@@ -73,6 +89,13 @@ typedef struct {
   uint8_t misc;         // nut phu (PS/SHARE/OPTIONS) lan truoc
   uint32_t lastRxMs;    // thoi diem nhan du lieu moi nhat (dung cho ma loi E14)
   bool gotData;         // da nhan duoc goi tin nao tu tay cam nay chua
+  int16_t lastAxisX;    // de phat hien canh tay cam thay doi
+  int16_t lastAxisY;
+  int16_t lastAxisRX;
+  int16_t lastAxisRY;
+  uint16_t lastBrake;
+  uint16_t lastThrottle;
+  uint32_t holdStartMs; // bat dau giu SHARE + OPTIONS (0 = khong giu)
 } slot_t;
 
 static slot_t gSlot[BP32_MAX_GAMEPADS];
@@ -181,6 +204,25 @@ static void appendButtonNames(char* buf, size_t size, uint16_t buttons, uint8_t 
   if (!any) appendStr(buf, size, "(khong nhan nut nao)");
 }
 
+/* Mui ten ASCII cho D-Pad de nhin nhanh: ^ = len, v = xuong, < = trai, > = phai */
+static void appendDpadArrow(char* buf, size_t size, uint8_t dpad) {
+  if (dpad == 0 || dpad == 0xFF) {
+    appendStr(buf, size, ".");
+    return;
+  }
+  if (dpad & DPAD_UP) appendStr(buf, size, "^");
+  if (dpad & DPAD_DOWN) appendStr(buf, size, "v");
+  if (dpad & DPAD_LEFT) appendStr(buf, size, "<");
+  if (dpad & DPAD_RIGHT) appendStr(buf, size, ">");
+}
+
+/* So sanh 2 gia tri analog co thay doi qua nguong hay khong */
+static bool axisChanged(int16_t a, int16_t b) {
+  int d = (int)a - (int)b;
+  if (d < 0) d = -d;
+  return d > AXIS_DEADBAND;
+}
+
 static void appendDpadNames(char* buf, size_t size, uint8_t dpad) {
   if (dpad == 0 || dpad == 0xFF) {
     appendStr(buf, size, "giua");
@@ -254,6 +296,8 @@ static void printConnectBanner(ControllerPtr ctl, int idx) {
   } else {
     logI("  Meo         : hay so dia chi BT o tren voi MAC ma ban da tra duoc");
   logI("  Dang cho goi tin dau tien tu tay cam...");
+  logI("  Ngat ket noi: giu dong thoi SHARE + OPTIONS trong %d ms, hoac giu nut PS ~10 giay de tat tay cam.",
+       DISCONNECT_HOLD_MS);
   }
   logI("================================================================================");
 }
@@ -302,9 +346,17 @@ static bool printChangeLines(int idx, uint16_t newButtons, uint8_t newDpad, uint
   }
 
   if (newDpad != gSlot[idx].dpad) {
+    char arrows[16];
     dpadNames[0] = 0;
+    arrows[0] = 0;
     appendDpadNames(dpadNames, sizeof(dpadNames), newDpad);
-    Serial.printf("[%8lu ms][PS4][NUT ] #%d D-PAD     : %s (0x%02X)\n", (unsigned long)millis(), idx, dpadNames, newDpad);
+    appendDpadArrow(arrows, sizeof(arrows), newDpad);
+
+    /* D-Pad duoc in thanh 1 khoi rieng co vien de de nhin giua dong log */
+    Serial.println(F("-------------------- D-PAD --------------------"));
+    Serial.printf("[%8lu ms][PS4][DPAD] #%d  %-4s  %-14s   (0x%02X)\n", (unsigned long)millis(), idx, arrows, dpadNames,
+                  newDpad);
+    Serial.println(F("-----------------------------------------------"));
     printed = true;
   }
   return printed;
@@ -315,6 +367,91 @@ static void applyDemoOutput(uint16_t buttons) {
 #if DEMO_LED_PIN >= 0
   digitalWrite(DEMO_LED_PIN, buttons ? HIGH : LOW);
 #endif
+}
+
+/* In DAY DU ("ban do goi tin"): moi truong 1 dong. Dung khi PRINT_MODE = 2. */
+static void printFullDump(ControllerPtr ctl, int idx) {
+  char names[160];
+  char dpadN[64];
+  char arrow[16];
+  names[0] = 0;
+  dpadN[0] = 0;
+  arrow[0] = 0;
+  appendButtonNames(names, sizeof(names), ctl->buttons(), (uint8_t)ctl->miscButtons());
+  appendDpadNames(dpadN, sizeof(dpadN), ctl->dpad());
+  appendDpadArrow(arrow, sizeof(arrow), ctl->dpad());
+
+  Serial.println(F("+================ GOI TIN TAY CAM ================+"));
+  Serial.printf("[%8lu ms][PS4] #%d  model=%d (%s)\n", (unsigned long)millis(), idx, ctl->getModel(),
+                ctl->getModelName().c_str());
+  Serial.printf("[PS4]   Nut bam      : 0x%04X   -> %s\n", ctl->buttons(), names);
+  Serial.printf("[PS4]   Nut phu      : 0x%02X     PS=%d  SHARE=%d  OPTIONS=%d\n", (uint8_t)ctl->miscButtons(),
+                ctl->miscSystem() ? 1 : 0, ctl->miscSelect() ? 1 : 0, ctl->miscStart() ? 1 : 0);
+  Serial.printf("[PS4]   D-Pad        : 0x%02X   %-4s  %s\n", ctl->dpad(), arrow, dpadN);
+  Serial.printf("[PS4]   Analog trai  : x=%+5d   y=%+5d\n", ctl->axisX(), ctl->axisY());
+  Serial.printf("[PS4]   Analog phai  : x=%+5d   y=%+5d\n", ctl->axisRX(), ctl->axisRY());
+  Serial.printf("[PS4]   Co  L2 / R2  : %4d  / %4d\n", ctl->brake(), ctl->throttle());
+  Serial.printf("[PS4]   Gyro         : x=%+6d  y=%+6d  z=%+6d\n", ctl->gyroX(), ctl->gyroY(), ctl->gyroZ());
+  Serial.printf("[PS4]   Gia toc      : x=%+6d  y=%+6d  z=%+6d\n", ctl->accelX(), ctl->accelY(), ctl->accelZ());
+  Serial.printf("[PS4]   Pin          : %u%%  (%u/255)\n", (unsigned)((uint32_t)ctl->battery() * 100u / 255u),
+                ctl->battery());
+  Serial.println(F("+=================================================+"));
+}
+
+/* Xu ly 1 goi tin vua nhan duoc cua tay cam o vi tri idx. */
+static void handleControllerData(ControllerPtr ctl, int idx) {
+  uint16_t buttons = ctl->buttons();
+  uint8_t dpad = ctl->dpad();
+  uint8_t misc = (uint8_t)ctl->miscButtons();
+  slot_t* s = &gSlot[idx];
+
+  /* --- A) To hop tat ket noi: giu SHARE + OPTIONS du DISCONNECT_HOLD_MS --- */
+  bool holdCombo = ctl->miscSelect() && ctl->miscStart();
+  if (holdCombo) {
+    if (s->holdStartMs == 0) {
+      s->holdStartMs = millis();
+      logI("Dang giu SHARE + OPTIONS... giu them %d ms nua de ngat ket noi tay cam #%d.", DISCONNECT_HOLD_MS, idx);
+    } else if (millis() - s->holdStartMs >= (uint32_t)DISCONNECT_HOLD_MS) {
+      s->holdStartMs = 0;
+      logI("Ngat ket noi tay cam #%d theo yeu cau (SHARE + OPTIONS). Bam nut PS de ket noi lai.", idx);
+      ctl->disconnect();
+      return;
+    }
+  } else {
+    s->holdStartMs = 0;
+  }
+
+  /* --- B) Co su kien gi dang ke khong? --- */
+  bool changed = printChangeLines(idx, buttons, dpad, misc);
+
+  if (axisChanged(ctl->axisX(), s->lastAxisX) || axisChanged(ctl->axisY(), s->lastAxisY) ||
+      axisChanged(ctl->axisRX(), s->lastAxisRX) || axisChanged(ctl->axisRY(), s->lastAxisRY) ||
+      axisChanged((int16_t)ctl->brake(), (int16_t)s->lastBrake) ||
+      axisChanged((int16_t)ctl->throttle(), (int16_t)s->lastThrottle)) {
+    changed = true;
+  }
+
+  /* --- C) In du lieu --- */
+  if (changed) {
+#if PRINT_MODE == 2
+    printFullDump(ctl, idx);
+#else
+    printStateLine(ctl, idx);
+#endif
+    gLastStateLogMs = millis();
+  }
+
+  applyDemoOutput(buttons);
+
+  s->buttons = buttons;
+  s->dpad = dpad;
+  s->misc = misc;
+  s->lastAxisX = ctl->axisX();
+  s->lastAxisY = ctl->axisY();
+  s->lastAxisRX = ctl->axisRX();
+  s->lastAxisRY = ctl->axisRY();
+  s->lastBrake = ctl->brake();
+  s->lastThrottle = ctl->throttle();
 }
 
 /* ============================== C A L L B A C K ================================= */
@@ -365,6 +502,13 @@ void onConnectedController(ControllerPtr ctl) {
   gSlot[slot].misc = 0;
   gSlot[slot].lastRxMs = millis();
   gSlot[slot].gotData = false;
+  gSlot[slot].holdStartMs = 0;
+  gSlot[slot].lastAxisX = ctl->axisX();
+  gSlot[slot].lastAxisY = ctl->axisY();
+  gSlot[slot].lastAxisRX = ctl->axisRX();
+  gSlot[slot].lastAxisRY = ctl->axisRY();
+  gSlot[slot].lastBrake = ctl->brake();
+  gSlot[slot].lastThrottle = ctl->throttle();
 
   gEverConnected = true;
   gConnectCount++;
@@ -474,10 +618,6 @@ void loop() {
       if (ctl == nullptr || !ctl->isConnected()) continue;
       if (!ctl->hasData()) continue;
 
-      uint16_t buttons = ctl->buttons();
-      uint8_t dpad = ctl->dpad();
-      uint8_t misc = (uint8_t)ctl->miscButtons();
-
       gSlot[i].lastRxMs = millis();
 
       if (!gSlot[i].gotData) {
@@ -486,30 +626,22 @@ void loop() {
              i, (int)ctl->getClass(), ctl->getModel());
       }
 
-      /* In ngay khi co nut / D-Pad thay doi, kem 1 dong du lieu day du.
-       * (Du lieu lien tuc duoc in dinh ky o buoc 2 ben duoi, khong in moi goi tin
-       *  de tranh lam nghen Serial Monitor.) */
-      if (printChangeLines(i, buttons, dpad, misc)) {
-        printStateLine(ctl, i);
-        gLastStateLogMs = millis();
-      }
-
-      applyDemoOutput(buttons);
-
-      gSlot[i].buttons = buttons;
-      gSlot[i].dpad = dpad;
-      gSlot[i].misc = misc;
+      handleControllerData(ctl, i);
     }
   }
 
-  /* 2) In dinh ky cho de theo doi (khong can bam nut) */
-#if PRINT_INTERVAL_MS > 0
+  /* 2) In dinh ky cho de theo doi (chi khi PRINT_MODE = 1 hoac 2) */
+#if PRINT_MODE > 0 && PRINT_INTERVAL_MS > 0
   if (millis() - gLastStateLogMs >= PRINT_INTERVAL_MS) {
     gLastStateLogMs = millis();
     for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
       ControllerPtr ctl = myControllers[i];
       if (ctl == nullptr || !ctl->isConnected() || !ctl->hasData()) continue;
+#if PRINT_MODE == 2
+      printFullDump(ctl, i);
+#else
       printStateLine(ctl, i);
+#endif
     }
   }
 #endif
