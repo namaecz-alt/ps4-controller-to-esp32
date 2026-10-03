@@ -1,0 +1,9 @@
+{
+    // Xem https://go.microsoft.com/fwlink/?LinkId=827846 de biet them ve dinh dang file nay
+    "recommendations": [
+        "platformio.platformio-ide"
+    ],
+    "unwantedRecommendations": [
+        "ms-vscode.cpptools-extension-pack"
+    ]
+}
