@@ -18,10 +18,38 @@ Lập trình bằng **VS Code + PlatformIO**, chỉ cần cắm cáp USB vào ES
 
 | | |
 |---|---|
-| ✅ **Dùng được** | ESP32 bản **cổ điển**: ESP32-WROOM-32, ESP32-DevKitC, ESP32-WROVER, ESP32-PICO-D4… (có **Bluetooth Classic**) |
-| ❌ **Không dùng được** | ESP32-S3, ESP32-C3, ESP32-C6, ESP32-S2, ESP32-H2 → **không có Bluetooth Classic**, tay cầm PS4 không thể kết nối |
+| ✅ **Dùng được** | ESP32 bản **cổ điển**: module **ESP32-WROOM-32 / WROOM-32E / WROVER / PICO-D4** — gồm các board **ESP32-DevKitC**, **ESP32 DevKit V1 / V4 (DOIT)**, NodeMCU-32S… (có **Bluetooth Classic**) |
+| ❌ **Không dùng được** | Board dùng chip **ESP32-S3, ESP32-C3, ESP32-C6, ESP32-S2, ESP32-H2** (cũng hay được bán với tên có chữ *“DevKit”*: ESP32-S3-DevKitC-1, ESP32-C3-DevKitM-1, ESP32-C6-DevKitC-1…) → **không có Bluetooth Classic**, tay PS4 không thể kết nối |
 | ✅ Tay cầm | DualShock 4 (PS4) — tay chính hãng Sony. Tay nhái (Datafrog, …) có thể không hoạt động |
 | ✅ Phần mềm | VS Code + extension **PlatformIO IDE** |
+
+### ❓ “ESP32 DevKit” của tôi có Bluetooth Classic không?
+
+**Có nhé — miễn là board đó dùng chip ESP32 đời đầu.** “DevKit” chỉ là tên dạng board mạch, không phải tên chip.
+`ESP32-DevKitC` (board chính hãng Espressif) và `ESP32 DevKit V1` (bản DOIT bán rất phổ biến) gắn module
+**ESP32-WROOM-32** → **có Bluetooth Classic** → dùng bình thường với tay PS4.
+Chỉ những board *trùng tên “DevKit”* nhưng dùng chip **S3 / C3 / C6** mới không có.
+
+Theo tài liệu chính thức của Bluepad32: Bluetooth Classic (BR/EDR) **chỉ** có trên ESP32 đời đầu
+(ESP32 / ESP32-D0WD / Pico W), **không** có trên ESP32-S3 / C3 / C6 / H2. Và tay PS4 (DualShock 4) chỉ
+nói chuyện bằng BR/EDR → nên trên S3/C3 là **không thể** kết nối (bất kể code thế nào).
+
+**4 cách kiểm tra nhanh board của bạn:**
+
+1. **Nhìn module kim loại trên board** (chỗ có in chữ trắng):
+   - `ESP32-WROOM-32`, `ESP32-WROOM-32E`, `ESP32-WROVER-B`, `ESP32-PICO-D4` → ✅ dùng được
+   - `ESP32-S3-WROOM-1`, `ESP32-C3-MINI-1`, `ESP32-C6-WROOM-1` → ❌ không dùng được
+2. **Nhìn hình dáng / số chân:**
+   - ESP32 DevKit V1: **30 chân**, 1 cổng micro-USB. ESP32-DevKitC: **38 chân**, micro-USB hoặc USB-C.
+     → thường là ESP32 cổ điển ✅
+   - ESP32-S3-DevKitC-1: **44 chân** (2 hàng × 22), thường có **2 cổng USB-C** → S3 ❌
+   - ESP32-C3 Super Mini / DevKitM: board **rất nhỏ**, 1 cổng USB-C (có khi chỉ ~20 chân) → C3 ❌
+3. **Xem log lúc reset** (mở Serial Monitor 115200, bấm nút **EN**):
+   - ESP32 cổ điển: `ets Jul 29 2019 ...` rồi `rst:0x1 (POWERON_RESET)...` và `chip is ESP32-D0WD...`
+   - ESP32-S3: `ESP-ROM:esp32s3-20210327…`  •  ESP32-C3: `ESP-ROM:esp32c3-…` (tên chip ghi ngay ở dòng ROM)
+4. **Hoặc để chương trình này tự báo:** lúc khởi động nó in dòng
+   `Chip : ESP32 (co Bluetooth Classic - OK voi tay cam PS4)` — nếu là chip khác nó sẽ in
+   `Chip : ESP32-S3 ...` kèm **mã lỗi E21**.
 
 Lần build đầu tiên PlatformIO sẽ tự tải toolchain + framework (khoảng vài trăm MB), cần mạng Internet.
 
