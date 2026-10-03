@@ -174,6 +174,13 @@ Ví dụ: giữ **L1 + X** thì `btn=0x0011`.
 Đây là **địa chỉ Bluetooth của chính tay cầm** (in ra ở dòng `Dia chi BT` khi kết nối → bạn có thể đối
 chiếu để chắc chắn đúng tay cầm của mình).
 
+> **Hỏi: MAC phải viết đúng chữ HOA/thường mới kết nối được à?**
+> **Không.** Địa chỉ MAC là số hệ 16 (hex), chữ hoa hay thường **hoàn toàn như nhau**:
+> `a0:5a:5d:f9:c5:80` = `A0:5A:5D:F9:C5:80` = `A0:5a:5D:f9:C5:80`. Firmware đọc bằng `sscanf("%x")`
+> nên nhận cả hai. Quan trọng hơn: **firmware không dùng MAC để kết nối** — việc tìm & kết nối do
+> Bluepad32 tự làm. MAC chỉ dùng để *lọc* (khi `USE_MAC_FILTER 1`) và để bạn *đối chiếu* mà thôi.
+> Nếu không kết nối được thì nguyên nhân nằm ở chỗ khác (xem mục *Xử lý sự cố*), không phải hoa/thường.
+
 Điều **quan trọng cần biết**: tay cầm PS4 hoạt động theo kiểu *“tay cầm nhớ địa chỉ của máy chủ”*.
 Vì vậy:
 
@@ -207,12 +214,13 @@ Trong `src/main.cpp`:
 | **E10** | Sau 15 giây chưa kết nối được tay cầm nào | Kiểm tra: tay cầm đã bật chưa? có đang ở chế độ ghép nối (giữ **SHARE + PS** tới khi đèn nháy trắng)? còn pin? xa quá 10 m? |
 | **E11** | Tay cầm kết nối nhưng **không khớp** `TARGET_MAC` (khi `USE_MAC_FILTER 1`) | Đặt `USE_MAC_FILTER 0`, hoặc sửa lại `TARGET_MAC` cho đúng |
 | **E12** | Mất kết nối với tay cầm | Bình thường khi bạn tắt tay cầm. ESP32 vẫn ở chế độ chờ → bấm **PS** để kết nối lại |
-| **E13** | Thiết bị vừa kết nối **không phải tay cầm** (bàn phím/chuột Bluetooth…) | Không cần làm gì — ESP32 đã tự ngắt thiết bị đó |
+| **E13** | Thiết bị vừa kết nối là **bàn phím/chuột Bluetooth** (không phải tay cầm) | Không cần làm gì — ESP32 tự ngắt thiết bị đó. *(Không còn báo nhầm cho tay cầm nữa — xem mục xử lý sự cố bên dưới)* |
 | **E14** | Tay cầm báo đã kết nối nhưng **3 giây không gửi dữ liệu** (bị treo) | ESP32 tự ngắt để kết nối lại. Nếu lặp nhiều lần → pin yếu hoặc nhiễu 2.4 GHz |
 | **E15** | Đã đủ 4 tay cầm (`BP32_MAX_GAMEPADS`) | Ngắt bớt 1 tay cầm |
 | **E20** | `TARGET_MAC` sai định dạng | Sửa về dạng `AA:BB:CC:DD:EE:FF` |
 | **E21** | Chip không có **Bluetooth Classic** (ESP32-S3/C3/C6/S2…) | Phải dùng board ESP32 cổ điển |
-| **E22** | Mất kết nối **≥ 5 lần liên tiếp** | Sạc pin, tắt/bật lại tay cầm, hoặc xoá khoá Bluetooth: bỏ comment `BP32.forgetBluetoothKeys();` trong `setup()` rồi nạp lại |
+| **E22** | Mất kết nối **≥ 5 lần liên tiếp** | Sạc pin, tắt/bật lại tay cầm, hoặc đặt `FORGET_BT_KEYS_ON_BOOT 1` rồi nạp lại để xoá khoá Bluetooth cũ |
+| **E23** | Kết nối được **3 lần nhưng không lần nào có dữ liệu** → ESP32 **tự xoá khoá Bluetooth** và thử lại | Tắt tay cầm rồi **giữ SHARE + PS** để ghép nối lại từ đầu |
 
 ---
 
@@ -227,6 +235,8 @@ Trong `src/main.cpp`:
 | `WARN_REPEAT_SEC` | `30` | Nhắc lại cảnh báo mỗi bao nhiêu giây |
 | `DATA_TIMEOUT_MS` | `3000` | Không có dữ liệu trong bao lâu thì coi là treo (**E14**) |
 | `DISCONNECT_WARN_LIMIT` | `5` | Số lần mất kết nối liên tiếp trước khi in **E22** |
+| `FORGET_BT_KEYS_ON_BOOT` | `0` | `1` = **xoá hết khoá Bluetooth** đã lưu trong ESP32 mỗi lần khởi động (dùng khi tay cầm kết nối được nhưng bị ngắt liên tục). Nhớ đổi lại `0` sau khi ghép nối xong |
+| `FAILED_ATTEMPT_LIMIT` | `3` | Số lần kết nối được nhưng không có dữ liệu trước khi tự xoá khoá Bluetooth (**E23**) |
 | `DEMO_LED_PIN` | `2` | Chân LED demo (GPIO2 = LED trên board DevKit). `-1` để tắt demo |
 
 Muốn bật lại “chuột ảo” cho touchpad của DS4 (ESP32 sẽ báo thêm 1 thiết bị chuột khi chạm touchpad):
@@ -276,6 +286,9 @@ Ngoài ra có thể điều khiển ngược lại tay cầm: `setColorLED(r,g,b
 | Kết nối được nhưng vài giây lại mất (E12/E14/E22) | Pin yếu; nhiễu 2.4 GHz (WiFi/router gần đó — thử tắt WiFi); tay cầm nhái; thử `forgetBluetoothKeys()` rồi ghép lại |
 | Board là ESP32-S3/C3/C6 | Không thể dùng với tay PS4 (xem **E21**) — cần board ESP32 cổ điển |
 | Đã ghép với thiết bị khác (PS4, điện thoại, ESP32 khác) | Không sao: giữ **SHARE + PS** để ghép nối lại với ESP32 |
+| Log có `DS4: Failed to create virtual device` | **Bình thường, không phải lỗi.** Dòng này do Bluepad32 in ra khi nó không tạo "chuột ảo" cho touchpad — vì firmware đã chủ động tắt tính năng đó (`BP32.enableVirtualDevice(false)`). Tay cầm vẫn hoạt động bình thường |
+| Log có `sdp_query_timeout()` rồi tay cầm rớt | ESP32 đang giữ **khoá Bluetooth cũ bị lỗi** nên không đọc được thông tin tay cầm. Cách sửa: đặt `FORGET_BT_KEYS_ON_BOOT 1` trong `src/main.cpp` → nạp lại → **tắt tay cầm, giữ SHARE + PS** để ghép nối lại → đổi lại `0`. (Hoặc nạp với `upload_flags = --erase-all` trong `platformio.ini` để xoá sạch flash) |
+| Trước đây thấy lỗi `E13 ... (class=0)` khi tay cầm vừa kết nối | **Đã sửa trong bản này.** Đó là lỗi của firmware cũ: kiểm tra `isGamepad()` ngay lúc tay cầm vừa kết nối, nhưng lúc đó Bluepad32 chưa nhận gói tin đầu tiên nên `class` vẫn = 0 (NONE) → firmware hiểu nhầm và **đá tay cầm ra**. Nay firmware chỉ loại bỏ bàn phím/chuột, còn tay cầm thì chờ dữ liệu đầu tiên |
 
 ---
 

@@ -47,6 +47,15 @@
 /* Neu da ket noi ma khong nhan duoc du lieu trong bao lâu (ms) thi coi nhu treo -> ngat de ket noi lai. */
 #define DATA_TIMEOUT_MS 3000
 
+/* 1 = XOA het khoa Bluetooth da luu trong ESP32 ngay khi khoi dong.
+ * Dung khi tay cam ket noi duoc nhung bi ngat lien tuc (khoa cu bi loi / SDP timeout).
+ * Sau khi ghep noi lai thanh cong, nho doi ve 0 de ESP32 nho tay cam cho cac lan sau. */
+#define FORGET_BT_KEYS_ON_BOOT 0
+
+/* So lan ket noi that bai lien tiep (ket noi duoc nhung khong co du lieu)
+ * truoc khi ESP32 tu xoa khoa Bluetooth cu va in ma loi E23. */
+#define FAILED_ATTEMPT_LIMIT 3
+
 /* So lan mat ket noi lien tiep truoc khi goi y "xoa khoa Bluetooth" (ma E22). */
 #define DISCONNECT_WARN_LIMIT 5
 
@@ -63,6 +72,7 @@ typedef struct {
   uint8_t dpad;         // D-Pad lan truoc
   uint8_t misc;         // nut phu (PS/SHARE/OPTIONS) lan truoc
   uint32_t lastRxMs;    // thoi diem nhan du lieu moi nhat (dung cho ma loi E14)
+  bool gotData;         // da nhan duoc goi tin nao tu tay cam nay chua
 } slot_t;
 
 static slot_t gSlot[BP32_MAX_GAMEPADS];
@@ -77,6 +87,8 @@ static uint32_t gLastStateLogMs = 0;
 static bool gEverConnected = false;
 static int gConnectCount = 0;
 static int gDisconnectStreak = 0;
+static int gFailedAttempts = 0;  // so lan ket noi duoc nhung khong co du lieu
+static bool gKeysForgotten = false;
 
 /* ============================== H A M   H O   T R O ============================= */
 
@@ -241,6 +253,7 @@ static void printConnectBanner(ControllerPtr ctl, int idx) {
     logI("  Loc MAC     : BAT - chi cho phep tay cam co MAC %s", TARGET_MAC);
   } else {
     logI("  Meo         : hay so dia chi BT o tren voi MAC ma ban da tra duoc");
+  logI("  Dang cho goi tin dau tien tu tay cam...");
   }
   logI("================================================================================");
 }
@@ -310,8 +323,13 @@ static void applyDemoOutput(uint16_t buttons) {
 void onConnectedController(ControllerPtr ctl) {
   ControllerProperties props = ctl->getProperties();
 
-  if (!ctl->isGamepad()) {
-    logE("E13", "Thiet bi vua ket noi khong phai tay cam (class=%d). Da ngat ket noi.", (int)ctl->getClass());
+  /* LUU Y KY THUAT: KHONG duoc kiem tra ctl->isGamepad() o day!
+   * Vao thoi diem callback nay duoc goi, Bluepad32 chua nhan goi tin dau tien tu tay cam
+   * nen "class" van la 0 (UNI_CONTROLLER_CLASS_NONE) va isGamepad() == false.
+   * Chi loai bo cac thiet bi chac chan khong phai tay cam (ban phim / chuot Bluetooth). */
+  if (ctl->isMouse() || ctl->isKeyboard()) {
+    logE("E13", "Thiet bi vua ket noi khong phai tay cam (class=%d, model=%d). Da ngat ket noi.",
+         (int)ctl->getClass(), ctl->getModel());
     ctl->disconnect();
     return;
   }
@@ -346,6 +364,7 @@ void onConnectedController(ControllerPtr ctl) {
   gSlot[slot].dpad = 0;
   gSlot[slot].misc = 0;
   gSlot[slot].lastRxMs = millis();
+  gSlot[slot].gotData = false;
 
   gEverConnected = true;
   gConnectCount++;
@@ -411,10 +430,18 @@ void setup() {
   BP32.setup(&onConnectedController, &onDisconnectedController);
 
   /* LUU Y QUAN TRONG:
-   * - Khong goi BP32.forgetBluetoothKeys() o day, vi nhu vay ESP32 se quen tay cam
+   * - Binh thuong KHONG goi BP32.forgetBluetoothKeys(), vi nhu vay ESP32 se quen tay cam
    *   => moi lan bat len deu phai ghep noi lai tu dau.
-   * - Chi goi ham nay khi ban muon "quen het" tay cam da ghep truoc do (bo comment dong duoi). */
-  // BP32.forgetBluetoothKeys();
+   * - Chi xoa khoa khi tay cam ket noi duoc nhung cu bi ngat (khoa cu bi loi).
+   *   Cach lam: doi FORGET_BT_KEYS_ON_BOOT thanh 1 o dau file, nap lai, ghep noi lai,
+   *   roi doi lai thanh 0. */
+#if FORGET_BT_KEYS_ON_BOOT
+  Serial.println();
+  Serial.println(F(">>> FORGET_BT_KEYS_ON_BOOT = 1 : dang xoa khoa Bluetooth cu trong ESP32..."));
+  BP32.forgetBluetoothKeys();
+  Serial.println(F(">>> Da xoa. Hay TAT tay cam, roi giu SHARE + PS de ghep noi lai tu dau."));
+  Serial.println();
+#endif
 
   /* Cho phep ESP32 tim va nhan ket noi moi (che do mac dinh cua Bluepad32) */
   BP32.enableNewBluetoothConnections(true);
@@ -453,6 +480,12 @@ void loop() {
 
       gSlot[i].lastRxMs = millis();
 
+      if (!gSlot[i].gotData) {
+        gSlot[i].gotData = true;
+        logI("Da nhan du lieu dau tien tu tay cam #%d (class=%d, model=%d). Ket noi HOAT DONG TOT.",
+             i, (int)ctl->getClass(), ctl->getModel());
+      }
+
       /* In ngay khi co nut / D-Pad thay doi, kem 1 dong du lieu day du.
        * (Du lieu lien tuc duoc in dinh ky o buoc 2 ben duoi, khong in moi goi tin
        *  de tranh lam nghen Serial Monitor.) */
@@ -488,6 +521,7 @@ void loop() {
     if (millis() - gSlot[i].lastRxMs > DATA_TIMEOUT_MS) {
       logE("E14", "Tay cam #%d khong gui du lieu trong %lu ms (bi treo). Ngat ket noi de thu lai...", i,
            (unsigned long)(millis() - gSlot[i].lastRxMs));
+      if (!gSlot[i].gotData) gFailedAttempts++;
       ctl->disconnect(); /* callback onDisconnectedController() se duoc goi */
     }
   }
@@ -508,13 +542,23 @@ void loop() {
       logE("E10", "Chua ket noi duoc tay cam nao (da cho %lu giay). Kiem tra: tay cam da bat? da o che do ghep noi "
                   "(giu SHARE + PS den khi den nhay trang)? con pin? khoang cach < 10 m?",
            (unsigned long)((millis() - gBootMs) / 1000u));
-      logI("Neu tay cam dang bat binh thuong: tat tay cam, giu SHARE + PS ~5 giay de vao che do ghep noi.");
-      logI("Neu board khong phai ESP32 co Bluetooth Classic (vd. ESP32-S3/C3) thi khong the ket noi PS4.");
+      logI("Neu tay cam dang bat binh thuong: TAT tay cam, roi giu SHARE + PS ~5 giay de vao che do ghep noi.");
+      logI("Tay cam da tung ghep voi may khac (PS4/dien thoai) thi PHAI giu SHARE + PS moi ket noi duoc voi ESP32.");
+      logI("Neu van khong duoc: dat FORGET_BT_KEYS_ON_BOOT = 1 o dau file main.cpp, nap lai, roi ghep noi lai.");
     } else {
       logI("Chua co tay cam nao ket noi lai. Bam nut PS tren tay cam de ESP32 tu ket noi lai.");
     }
   }
 
-  /* 5) Nhuong CPU cho cac tac vu khac (Bluetooth, WiFi...). Khong duoc bo dong nay. */
+  /* 5) TU CUU: da ket noi duoc nhieu lan nhung khong lan nao co du lieu
+   *    => khoa Bluetooth luu trong ESP32 co the da bi loi. Xoa 1 lan roi thu lai. */
+  if (!gEverConnected && !gKeysForgotten && gFailedAttempts >= FAILED_ATTEMPT_LIMIT) {
+    gKeysForgotten = true;
+    BP32.forgetBluetoothKeys();
+    logE("E23", "Tay cam da ket noi duoc %d lan nhung khong lan nao gui du lieu => da XOA khoa Bluetooth cu. "
+                "Hay TAT tay cam roi giu SHARE + PS de ghep noi lai tu dau.", gFailedAttempts);
+  }
+
+  /* 6) Nhuong CPU cho cac tac vu khac (Bluetooth, WiFi...). Khong duoc bo dong nay. */
   delay(5);
 }
