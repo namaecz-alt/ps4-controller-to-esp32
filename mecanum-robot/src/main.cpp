@@ -116,10 +116,14 @@ static const int8_t MOTOR_PINS[4][3] = {
 #define MOTOR_TEST_PCT   40  /* Tốc độ khi test (%). Nên để nhỏ: 30..50 */
 #define MOTOR_TEST_MS  2000  /* Thời gian quay mỗi động cơ (ms) */
 
-/* ---------------- 8. An toàn & log -------------------------------------------- */
+/* ---------------- 8. LED trạng thái (GPIO2 trên DevKit) ----------------------- */
+#define STATUS_LED_PIN    2   /* -1 = không dùng                                   */
+#define LED_BLINK_FAST_MS 150 /* ĐÃ kết nối tay cầm  -> nháy NHANH                 */
+#define LED_BLINK_SLOW_MS 700 /* CHƯA kết nối        -> nháy CHẬM                  */
+
+/* ---------------- 9. An toàn & log -------------------------------------------- */
 #define DATA_TIMEOUT_MS      500 /* Quá lâu không nhận gói tin -> DỪNG ĐỘNG CƠ */
 #define DISCONNECT_HOLD_MS  2000 /* Giữ SHARE + OPTIONS để ngắt kết nối        */
-#define STATUS_LED_PIN         2 /* LED báo có lệnh chạy (-1 = không dùng)     */
 #define PRINT_PWM_CHANGES      1 /* In ra Serial mỗi khi lệnh chạy thay đổi    */
 
 /* =================================================================================
@@ -140,6 +144,8 @@ static uint32_t gLastRampMs = 0;
 static uint32_t gLastRxMs = 0;       /* thời điểm nhận gói tin cuối cùng */
 static uint32_t gHoldStartMs = 0;    /* đang giữ SHARE + OPTIONS */
 static bool  gConnected = false;
+static uint32_t gLedMs = 0;      /* nháy LED trạng thái */
+static bool  gLedOn = false;
 
 /* Lệnh chạy hiện tại (để so sánh và in khi thay đổi) */
 typedef struct {
@@ -282,6 +288,18 @@ static void computeWheelPwm(const cmd_t* c) {
   for (int i = 0; i < 4; i++) {
     gTargetPwm[i] = (int)(m[i] * scale + (m[i] >= 0 ? 0.5f : -0.5f));
   }
+}
+
+/* Nháy LED: NHANH khi đã kết nối tay cầm, CHẬM khi chưa (không dùng delay) */
+static void updateStatusLed(void) {
+#if STATUS_LED_PIN >= 0
+  uint32_t period = gConnected ? (uint32_t)LED_BLINK_FAST_MS : (uint32_t)LED_BLINK_SLOW_MS;
+  if (millis() - gLedMs >= period) {
+    gLedMs = millis();
+    gLedOn = !gLedOn;
+    digitalWrite(STATUS_LED_PIN, gLedOn ? HIGH : LOW);
+  }
+#endif
 }
 
 /* ============================ Đ Ọ C   L Ệ N H   T Ừ   T A Y   C Ầ M =========== */
@@ -477,6 +495,8 @@ void setup() {
               "Hay dung board ESP32 (WROOM-32 / DevKitC).");
 #endif
 
+  logI("LED trang thai GPIO%d: nhay NHANH %d ms = DA KET NOI | nhay CHAM %d ms = CHUA KET NOI", STATUS_LED_PIN,
+       LED_BLINK_FAST_MS, LED_BLINK_SLOW_MS);
   logI("San sang. Bat tay cam PS4 (lan dau: giu SHARE + PS)...");
 }
 
@@ -533,12 +553,8 @@ void loop() {
   /* --- D) Đưa PWM ra động cơ (có tăng tốc dần) --- */
   applyRamp();
 
-#if STATUS_LED_PIN >= 0
-  bool moving = false;
-  for (int i = 0; i < NUM_MOTORS; i++)
-    if (gCurPwm[i] != 0) moving = true;
-  digitalWrite(STATUS_LED_PIN, moving ? HIGH : LOW);
-#endif
+  /* --- E) Nháy LED trạng thái: nhanh = đã kết nối, chậm = chưa --- */
+  updateStatusLed();
 
   delay(5); /* nhường CPU cho Bluetooth */
 }

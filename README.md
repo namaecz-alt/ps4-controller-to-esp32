@@ -64,8 +64,21 @@ ps4-controller-to-esp32/
 │   └── main.cpp        ← TOÀN BỘ chương trình (có phần cấu hình ở đầu file)
 ├── .vscode/
 │   └── extensions.json ← gợi ý cài extension PlatformIO
-└── README.md           ← tài liệu bạn đang đọc
+├── README.md           ← tài liệu bạn đang đọc
+│
+├── mecanum-robot/      ← project 2: robot 4 bánh mecanum (chỉ di chuyển)
+│   ├── platformio.ini
+│   ├── src/main.cpp
+│   └── README.md
+│
+└── mecanum-robot-pro/  ← project 3: robot mecanum BẢN ĐẦY ĐỦ
+    ├── platformio.ini    (di chuyển + X=dừng khẩn cấp, O=còi, Vuông=đèn,
+    ├── src/main.cpp       Tam giác=cơ cấu 1, PS=cơ cấu 2, L3=đổi tốc độ,
+    └── README.md          R3=đảo đầu; LED nháy nhanh/chậm theo kết nối)
 ```
+
+> Mỗi thư mục (`/`, `mecanum-robot/`, `mecanum-robot-pro/`) là **một project PlatformIO độc lập**.
+> Mở riêng từng thư mục bằng `File ▸ Open Folder`, rồi **Upload and Monitor**.
 
 ---
 
